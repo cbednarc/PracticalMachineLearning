@@ -1,0 +1,99 @@
+---
+title: "Exercise Quality Modeling"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Summary
+The goal is to predict how well an exercise is performed from a set of measurements across multiple participants. A linar discriminant model is trained and applied to a testing set.
+
+# Data
+There are two sets of data available: training (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and testing (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv). More information about the data can be found here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. The data are a set of measurements of variables such as pitch, yaw, and roll from various sensors during an exercise. The variable classe is a measurement on how well the exercise is performed. There are a total of 159 possible predictors for classe. Many of these have missing values (e.g., NA). A decision was made to remove any variable that had any missing data in the training set. In addition, the first 7 columns were removed since they contain personal and time information, which are not relevant. After the removal, 52 predictors remain and the classe variable.
+
+```{r}
+library(caret, quietly=TRUE)
+library(data.table, quietly=TRUE)
+
+set.seed(123456)
+
+trainingRaw = fread("pml-training.csv")
+
+# Remove first 7 columns since they contain personal and time info
+trainingRaw = trainingRaw[,-(1:7)]
+# Remove columns with any NAs
+cols.remove = NULL
+for (i in 1:ncol(trainingRaw)) {
+  if (any(is.na(trainingRaw[,i,with=FALSE]))) {
+    cols.remove = c(cols.remove,i)
+  }
+}
+trainingRaw = trainingRaw[,-cols.remove,with=FALSE]
+n.train = nrow(trainingRaw)
+# Make classe a factor variable
+trainingRaw[,classe:=as.factor(classe)]
+
+training = trainingRaw
+colnames(training)
+```
+
+```{r}
+freqA = round(sum(training$classe=="A")/nrow(training),2)
+```
+
+The distribution of exercise classes shows the values to be non-uniform. The category A is most frequent (`` `r freqA` ``). A good model needs to have greater accuracy than the relative frequency of this category, since a prediction of A for every situation would result in that level of accuracy.
+
+```{r}
+h = hist(as.integer(training$classe), breaks=seq(0.5,5.5,1), axes=FALSE,
+         xlab="classe", main="Fig 1: Distribution of Exercise Quality Category")
+axis(1, at=1:5, labels=c("A","B","C","D","E"))
+axis(2, at=seq(0,0.1*ceiling(10*max(h$density)),0.05))
+```
+
+With a large number of predictors it is difficult to visualize the data. Looking at a few variables though (arm roll, pitch, yaw, and total acceleration), there does appear to be some clustering of the exercise quality categores in different regions of the phase space, meaning that classification may have success.
+
+```{r}
+featurePlot(training[,c("roll_arm","pitch_arm","yaw_arm","total_accel_arm")],
+            training$classe, "pairs", auto.key=list(columns=3), main="Fig 2: Pairs Plot of Select Predictors")
+```
+
+# Model
+A few different models were tested. A linear discriminant analysis (LDA) model was selected due to its easy interpretability and applicability for categorical data like this situation. It also had better performance than other tested algorithms like decision trees. Tests with fewer predictors also had inferior results, and pre-processing the data with principal component analysis for dimension reduction also resulted in lower accuracy. More complicated models like random forests had large computational demands for this dataset, so they were not used.
+
+```{r, echo=TRUE}
+mod.lda = train(classe~., data=training, method="lda")
+```
+```{r}
+acc.lda = round(mod.lda$results$Accuracy,3)
+```
+All 52 predictors were used to train the model, which had an in sample accuracy of `` `r acc.lda` `` (error = `` `r 1-acc.lda` ``). To test the stability of this and get an idea of out of sample error, cross validation was done using 10 folds.
+
+```{r}
+# Create folds for cross-validation
+nfolds = 10
+folds = createFolds(training$classe, k=nfolds, list=FALSE)
+acc = data.table(Fold=1:nfolds, Accuracy=NA)
+for (i in 1:nfolds) {
+  fold.training = training[folds!=i,]
+  fold.testing = training[folds==i,]
+  mod = train(classe~., data=fold.training, method="lda")
+  acc$Accuracy[i] = sum(predict(mod,fold.testing)==fold.testing$classe)/nrow(fold.testing)
+}
+acc[,Error:=1-Accuracy]
+print(acc)
+```
+
+While it may be possible to increase the accuracy of the results with a different model, this one performs fairly well. One would expect an accuracy of 0.20 under random guessing (5 categories), and an accuracy of `` `r freqA` `` if always predicting the most frequent category (A). The accuracy of this model is much higher than both.
+
+# Testing
+Finally, the model is applied to the testing data.
+
+```{r}
+testing = fread("pml-testing.csv")
+pred.test = predict(mod.lda, testing)
+print(data.table(Case=1:20, Prediction=pred.test))
+```
+
+
